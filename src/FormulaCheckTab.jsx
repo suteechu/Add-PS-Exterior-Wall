@@ -1,32 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { ClipboardCheck, Edit2, Save, X } from 'lucide-react';
-import { formulaMasterData as initialFormulaData } from './constants';
 
-export default function FormulaCheckTab() {
-  const [data, setData] = useState([]);
+export default function FormulaCheckTab({ formulaData, setFormulaData }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState([]);
 
-  useEffect(() => {
-    const saved = localStorage.getItem('formula_master_data');
-    if (saved) {
-      try {
-        setData(JSON.parse(saved));
-      } catch (e) {
-        setData(initialFormulaData || []);
-      }
-    } else {
-      setData(initialFormulaData || []);
-    }
-  }, []);
-
   const handleEdit = () => {
-    setEditData(JSON.parse(JSON.stringify(data)));
+    setEditData(JSON.parse(JSON.stringify(formulaData)));
     setIsEditing(true);
   };
 
   const handleSave = () => {
-    setData(editData);
+    setFormulaData(editData);
     localStorage.setItem('formula_master_data', JSON.stringify(editData));
     setIsEditing(false);
   };
@@ -78,7 +63,7 @@ export default function FormulaCheckTab() {
               </tr>
             </thead>
             <tbody>
-              {(isEditing ? editData : data).map((item, idx) => (
+              {(isEditing ? editData : formulaData).map((item, idx) => (
                 <tr key={idx} className="border-b border-slate-200 hover:bg-slate-50 transition-colors text-slate-800">
                   <td className="px-4 py-2 border-r border-slate-200 bg-slate-50/50">
                     {isEditing ? <input type="text" className="w-full px-2 py-1 border rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500" value={item.group || ''} onChange={e => handleChange(idx, 'group', e.target.value)} /> : <span className="font-bold">{item.group}</span>}
@@ -96,7 +81,7 @@ export default function FormulaCheckTab() {
                     {isEditing ? <input type="text" className="w-full px-2 py-1 border rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500" value={item.station || ''} onChange={e => handleChange(idx, 'station', e.target.value)} /> : <span className="text-slate-600">{item.station}</span>}
                   </td>
                   <td className="px-4 py-2 bg-emerald-50/30">
-                    {isEditing ? <input type="text" className="w-full px-2 py-1 border border-emerald-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500" value={item.rate || ''} onChange={e => handleChange(idx, 'rate', e.target.value)} /> : <span className="font-bold text-emerald-600">{item.rate}</span>}
+                    {isEditing ? <input type="number" step="0.001" className="w-full px-2 py-1 border border-emerald-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500" value={item.rate !== undefined ? item.rate : ''} onChange={e => handleChange(idx, 'rate', e.target.value)} /> : <span className="font-bold text-emerald-600">{!isNaN(parseFloat(item.rate)) ? parseFloat(item.rate).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) : item.rate}</span>}
                   </td>
                 </tr>
               ))}

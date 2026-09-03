@@ -1,10 +1,11 @@
 import React, { useRef, useState, useMemo } from 'react';
 import { FileSpreadsheet, Plus, Upload, Save, Trash2, Calculator, Play, Search, ChevronDown } from 'lucide-react';
 import Papa from 'papaparse';
-import { defaultRow, gridColumns, panelVariants, formulaMasterData } from './constants';
-import { isBasePanelId, isFrameId, isBoardId } from './utils';
+import { toast } from 'react-hot-toast';
+import { defaultRow, gridColumns, panelVariants } from './constants';
+import { isBasePanelId, isFrameId, isBoardId, copyToClipboard } from './utils';
 
-export default function CreatePsTab({ psGridData, setPsGridData, imMasterData, setImMasterData, psBomData, setPsBomData, psJobs, setPsJobs, setActiveTab }) {
+export default function CreatePsTab({ psGridData, setPsGridData, imMasterData, setImMasterData, psBomData, setPsBomData, psJobs, setPsJobs, setActiveTab, formulaData }) {
   const fileInputRef = useRef(null);
   const [filterKeyword, setFilterKeyword] = useState("");
   const [selectedRowIds, setSelectedRowIds] = useState(() => new Set([0]));
@@ -13,7 +14,7 @@ export default function CreatePsTab({ psGridData, setPsGridData, imMasterData, s
   const handleRunAuto = () => {
       const dataToRun = psGridData.filter((_, idx) => selectedRowIds.has(idx));
       if (dataToRun.length === 0) {
-          alert("กรุณาเลือกข้อมูลอย่างน้อย 1 รายการเพื่อดำเนินการ");
+          toast.error("กรุณาเลือกข้อมูลอย่างน้อย 1 รายการเพื่อดำเนินการ");
           return;
       }
 
@@ -62,42 +63,58 @@ export default function CreatePsTab({ psGridData, setPsGridData, imMasterData, s
       };
 
       const getRate = (code) => {
-          const found = formulaMasterData.find(f => f.code === code);
+          const found = formulaData.find(f => f.code === code);
           return found ? found.rate : 0;
       };
 
-      const basePanels = dataToRun.filter(r => isBasePanelId(r.partId) && r.partId.endsWith('0'));
-      if (basePanels.length === 0) alert("คำเตือน: ไม่พบรหัส Base Panel (รหัสที่ลงท้ายด้วย 0) ในไฟล์ที่นำเข้า การสร้างสูตร Variants อาจไม่สมบูรณ์");
+      const basePanels = dataToRun.filter(r => isBasePanelId(r.partId));
+      if (basePanels.length === 0) {
+          toast.error("ไม่พบรหัส Panel (AAFP, CCFP, ฯลฯ) ในไฟล์ที่เลือกเพื่อสร้าง BOM");
+          return;
+      }
 
       basePanels.forEach(fpBase => {
+          const isBaseZero = fpBase.partId.endsWith('0');
           const projectCode = fpBase.partId.length >= 8 ? fpBase.partId.substring(4, 8) : '';
           let feBase = dataToRun.find(r => isFrameId(r.partId) && r.partId.includes(projectCode)) || dataToRun.find(r => isFrameId(r.partId)); 
           let fzBase = dataToRun.find(r => isBoardId(r.partId) && r.partId.includes(projectCode)) || dataToRun.find(r => isBoardId(r.partId));
 
-          const areaImpNum = ((Number(fzBase?.width || 0) * Number(fzBase?.length || 0)) / 1000000);
+          const widthNum = Number(fzBase?.width || fpBase.width || 0);
+          const lengthNum = Number(fzBase?.length || fpBase.length || 0);
+          const areaImpNum = ((widthNum * lengthNum) / 1000000);
           const formatQtyImp = (num) => {
               let rounded = Math.round(num * 1000) / 1000;
               return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(3);
           };
 
-          const fzPartName = fzBase?.partName || '';
+          const fzPartName = fzBase?.partName || fpBase.partName || '';
           const hasTp45 = fzPartName.toLowerCase().includes('tp_45');
           const qty217Calc = areaImpNum > 0 ? formatQtyImp(areaImpNum * getRate('AAFT00010')) : "0";
           const qty104Calc = areaImpNum > 0 ? formatQtyImp(areaImpNum * getRate('AAFT00110')) : "0";
           const qtyCornerCalc = areaImpNum > 0 ? formatQtyImp(areaImpNum * getRate('AAFT00210')) : "0";
+          const screwQtyCalc = areaImpNum > 0 ? formatQtyImp(areaImpNum * getRate('AASB20710')) : "0";
 
-          if (feBase) addBomItem(fpBase.partId, feBase.partId, "1", "2", "F", "PF-FP", false);
-          if (Number(qty217Calc) > 0) addBomItem(fpBase.partId, `AAFT00010`, qty217Calc, "2", "F", "PF-TP", false);
-          if (Number(qty104Calc) > 0) addBomItem(fpBase.partId, `AAFT00110`, qty104Calc, "2", "F", "PF-TP", false);
-          if (hasTp45 && Number(qtyCornerCalc) > 0) addBomItem(fpBase.partId, `AAFT00210`, qtyCornerCalc, "2", "F", "PF-TP", false);
-          if (fzBase) addBomItem(fpBase.partId, fzBase.partId, "1", "2", "F", "PF-BP (Ext-wall)", false);
+          if (isBaseZero) {
+              if (feBase) {
+                  addBomItem(fpBase.partId, feBase.partId, "1", "2", "F", "PF-FP", false);
+                  if (Number(screwQtyCalc) > 0) addBomItem(fpBase.partId, 'AASB20710', screwQtyCalc, "2", "F", "Kanban => PF-FP", false);
+              }
+              if (Number(qty217Calc) > 0) addBomItem(fpBase.partId, `AAFT00010`, qty217Calc, "2", "F", "PF-TP", false);
+              if (Number(qty104Calc) > 0) addBomItem(fpBase.partId, `AAFT00110`, qty104Calc, "2", "F", "PF-TP", false);
+              if (hasTp45 && Number(qtyCornerCalc) > 0) addBomItem(fpBase.partId, `AAFT00210`, qtyCornerCalc, "2", "F", "PF-TP", false);
+              if (fzBase) addBomItem(fpBase.partId, fzBase.partId, "1", "2", "F", "PF-BP (Ext-wall)", false);
+          }
           
           const baseId = fpBase.partId.slice(0, -1);
           const baseName = fpBase.partName.replace(/\s+WI\s*$/i, '');
           
-          panelVariants.forEach((variant) => {
+          const variantsToProcess = isBaseZero 
+              ? panelVariants 
+              : panelVariants.filter(v => v.code === fpBase.partId.slice(-1).toUpperCase());
+
+          variantsToProcess.forEach((variant) => {
               const vPartId = baseId + variant.code;
-              const vPartName = baseName + " " + variant.suffix;
+              const vPartName = isBaseZero ? (baseName + " " + variant.suffix) : fpBase.partName;
               
               if (!existingImIds.has(vPartId)) {
                   newImItems.push({
@@ -110,7 +127,10 @@ export default function CreatePsTab({ psGridData, setPsGridData, imMasterData, s
                   existingImIds.add(vPartId);
               }
 
-              if(feBase) addBomItem(vPartId, feBase.partId, "1", "2", "F", "PF-FP", true);
+              if (feBase) {
+                  addBomItem(vPartId, feBase.partId, "1", "2", "F", "PF-FP", true);
+                  if (Number(screwQtyCalc) > 0) addBomItem(vPartId, 'AASB20710', screwQtyCalc, "2", "F", "Kanban => PF-FP", true);
+              }
               
               const aaftCodes = ['A','B','C','D','E','F','G','Q'];
               const sprayCodes = ['H','J','K','L','M','N'];
@@ -179,7 +199,7 @@ export default function CreatePsTab({ psGridData, setPsGridData, imMasterData, s
               return a.part_id_parent.localeCompare(b.part_id_parent);
           }));
       }
-      alert(`นำเข้าข้อมูลและสร้างสูตรสำเร็จ!\n- ประมวลผลกลุ่ม Base Panel พบ: ${basePanels.length} กลุ่ม\n- สร้าง IM Master และ BOM อัตโนมัติเรียบร้อยแล้วครับ`);
+      toast.success(`นำเข้าข้อมูลและสร้างสูตรสำเร็จ!\n- ประมวลผลกลุ่ม Base Panel พบ: ${basePanels.length} กลุ่ม\n- สร้าง IM Master และ BOM อัตโนมัติเรียบร้อยแล้วครับ`, { duration: 5000 });
   };
 
   const handleGridChange = (index, field, value) => {
@@ -195,26 +215,46 @@ export default function CreatePsTab({ psGridData, setPsGridData, imMasterData, s
 
   const handleDeleteSelectedRows = () => {
     if (selectedRowIds.size === 0) {
-        alert("กรุณาเลือกแถวที่ต้องการลบ");
+        toast.error("กรุณาเลือกแถวที่ต้องการลบ");
         return;
     }
-    if (window.confirm(`คุณต้องการลบข้อมูลที่เลือกจำนวน ${selectedRowIds.size} แถว ใช่หรือไม่?`)) {
-        const newData = psGridData.filter((_, idx) => !selectedRowIds.has(idx));
-        setPsGridData(newData.length > 0 ? newData : [{ ...defaultRow }]);
-        setSelectedRowIds(new Set(newData.length > 0 ? [0] : [0]));
-    }
+    toast((t) => (
+      <div>
+        <p className="font-bold mb-2">คุณต้องการลบข้อมูลที่เลือกจำนวน {selectedRowIds.size} แถว ใช่หรือไม่?</p>
+        <div className="flex gap-2 justify-end">
+          <button className="bg-orange-500 text-white px-3 py-1 rounded text-xs" onClick={() => {
+            const newData = psGridData.filter((_, idx) => !selectedRowIds.has(idx));
+            setPsGridData(newData.length > 0 ? newData : [{ ...defaultRow }]);
+            setSelectedRowIds(new Set(newData.length > 0 ? [0] : [0]));
+            toast.dismiss(t.id);
+            toast.success("ลบข้อมูลเรียบร้อย");
+          }}>ยืนยัน</button>
+          <button className="bg-slate-200 px-3 py-1 rounded text-xs" onClick={() => toast.dismiss(t.id)}>ยกเลิก</button>
+        </div>
+      </div>
+    ));
   };
 
   const handleSaveData = () => {
     localStorage.setItem('erp_system_data', JSON.stringify({ psGridData, imMasterData, psBomData, psJobs }));
-    alert("บันทึกข้อมูลสำเร็จ! (ข้อมูลจะยังอยู่แม้จะปิดหรือรีเฟรชหน้าต่าง)");
+    toast.success("บันทึกข้อมูลสำเร็จ! (ข้อมูลจะยังอยู่แม้จะปิดหรือรีเฟรชหน้าต่าง)");
   };
   const handleClearData = () => {
-    if(window.confirm("คุณต้องการล้างข้อมูลทั้งหมดในระบบใช่หรือไม่?")) {
-      setPsGridData([{ ...defaultRow }]); setImMasterData([]); setPsBomData([]); setPsJobs([]);
-      setSelectedRowIds(new Set([0]));
-      localStorage.removeItem('erp_system_data');
-    }
+    toast((t) => (
+      <div>
+        <p className="font-bold mb-2">คุณต้องการล้างข้อมูลทั้งหมดในระบบใช่หรือไม่?</p>
+        <div className="flex gap-2 justify-end">
+          <button className="bg-red-500 text-white px-3 py-1 rounded text-xs" onClick={() => {
+            setPsGridData([{ ...defaultRow }]); setImMasterData([]); setPsBomData([]); setPsJobs([]);
+            setSelectedRowIds(new Set([0]));
+            localStorage.removeItem('erp_system_data');
+            toast.dismiss(t.id);
+            toast.success("ล้างข้อมูลเรียบร้อย");
+          }}>ยืนยัน</button>
+          <button className="bg-slate-200 px-3 py-1 rounded text-xs" onClick={() => toast.dismiss(t.id)}>ยกเลิก</button>
+        </div>
+      </div>
+    ), { duration: 5000 });
   };
 
   const handleFileUpload = (e) => {
@@ -222,28 +262,72 @@ export default function CreatePsTab({ psGridData, setPsGridData, imMasterData, s
     if (!file) return;
 
     Papa.parse(file, {
-      skipEmptyLines: true,
+      header: true,
+      skipEmptyLines: 'greedy',
       complete: (results) => {
-        if (results.data.length < 2) {
-            alert("ข้อผิดพลาด: ไฟล์ CSV ไม่มีข้อมูลหรือมีแค่หัวตาราง");
+        if (results.data.length === 0) {
+            toast.error("ข้อผิดพลาด: ไฟล์ CSV ไม่มีข้อมูลหรือรูปแบบไม่ถูกต้อง");
             return;
         }
         const newData = [];
-        let errorRows = [];
-        for (let i = 1; i < results.data.length; i++) {
-            const cols = results.data[i].map(c => typeof c === 'string' ? c.trim() : c);
-            if (!cols[0]) continue;
-            if (cols.length < 5) { errorRows.push(i + 1); continue; }
+        let missingDims = 0;
+        
+        results.data.forEach((row) => {
+            const getVal = (keyNames) => {
+                const lowerNames = keyNames.map(k => k.toLowerCase());
+                for (let k of Object.keys(row)) {
+                    if (lowerNames.includes(k.trim().toLowerCase())) {
+                        return row[k];
+                    }
+                }
+                return '';
+            };
+
+            const partIdRaw = getVal(['part id', 'part_id', 'partid']) || Object.values(row)[0];
+            if (!partIdRaw) return;
+            const partId = String(partIdRaw).trim();
+
+            let pName = getVal(['part name', 'part_name']) || '';
+            if (partId.startsWith('DDFP') || partId.startsWith('DDFE') || partId.startsWith('DDFZ')) {
+                pName = pName ? `${pName}_High Unit` : '_High Unit';
+            }
+
             newData.push({
-                partId: cols[0] || '', method: cols[1] || '', place: cols[2] || '', station: cols[3] || '',
-                partName: cols[4] || '', drawing: cols[5] || '', glAccount: cols[6] || '', costCenter: cols[7] || '',
-                costStructure: cols[8] || '', orderType: cols[9] || '', partUnit: cols[10] || '', purchaseGroup: cols[11] || '',
-                valClass: cols[12] || '', thickness: cols[13] || '', width: cols[14] || '', length: cols[15] || '',
-                exWall: cols[16] || '', color: cols[17] || '', status: cols[18] || '', taperSide: cols[19] || '',
-                tp1: cols[20] || '', tp2: cols[21] || '', tp3: cols[22] || '', tp4: cols[23] || ''
+                partId: partId || '',
+                method: getVal(['method']),
+                place: getVal(['place']),
+                station: getVal(['station']),
+                partName: pName,
+                drawing: getVal(['drawing']),
+                glAccount: getVal(['gl account', 'gl_account']),
+                costCenter: getVal(['cost center', 'cost_center']),
+                costStructure: getVal(['cost structure', 'cost_structure']),
+                orderType: getVal(['order type', 'order_type']),
+                partUnit: getVal(['part unit', 'part_unit']),
+                purchaseGroup: getVal(['purchase group', 'purchase_group', 'pur. group', 'pur group']),
+                valClass: getVal(['val class', 'val_class']),
+                thickness: getVal(['thickness']),
+                width: getVal(['width']),
+                length: getVal(['length']),
+                exWall: getVal(['ex wall', 'ex_wall']),
+                color: getVal(['color']),
+                status: getVal(['status']),
+                taperSide: getVal(['taper side', 'taper_side']),
+                tp1: getVal(['tp1 upper', 'tp1']),
+                tp2: getVal(['tp2 upper r', 'tp2']),
+                tp3: getVal(['tp3']),
+                tp4: getVal(['tp4 upper l', 'tp4'])
             });
-        }
-        if (errorRows.length > 0) alert(`ระบบพบข้อมูลไม่สมบูรณ์ที่บรรทัด: ${errorRows.join(', ')}\n(ระบบจะข้ามบรรทัดเหล่านี้ไป)`);
+
+            if (partId && (isBasePanelId(partId) || isBoardId(partId))) {
+                const w = getVal(['width']);
+                const l = getVal(['length']);
+                if (!w || !l || Number(w) <= 0 || Number(l) <= 0) {
+                    missingDims++;
+                }
+            }
+        });
+
         if (newData.length > 0) { 
             if (importMode === 'replace') {
                 setPsGridData(newData); 
@@ -259,9 +343,16 @@ export default function CreatePsTab({ psGridData, setPsGridData, imMasterData, s
                 newIndices.forEach(idx => nextSet.add(idx));
                 setSelectedRowIds(nextSet);
             }
+            if (missingDims > 0) {
+                toast.error(`นำเข้าสำเร็จ ${newData.length} รายการ\nแต่พบข้อมูลที่ไม่มีขนาด (กว้าง/ยาว) จำนวน ${missingDims} รายการ! กรุณาตรวจสอบข้อมูลอีกครั้ง`, { duration: 6000 });
+            } else {
+                toast.success(`โหลดข้อมูลสำเร็จ ${newData.length} รายการ`);
+            }
+        } else {
+            toast.error("ไม่พบข้อมูล PART ID ที่ถูกต้องในไฟล์ CSV");
         }
       },
-      error: (err) => alert("เกิดข้อผิดพลาดในการอ่านไฟล์ CSV: " + err.message)
+      error: (err) => toast.error("เกิดข้อผิดพลาดในการอ่านไฟล์ CSV: " + err.message)
     });
     e.target.value = null;
   };
@@ -298,7 +389,7 @@ export default function CreatePsTab({ psGridData, setPsGridData, imMasterData, s
     return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(3);
   };
   const getFormulaRate = (code) => {
-      const found = formulaMasterData.find(f => f.code === code);
+      const found = formulaData.find(f => f.code === code);
       return found ? found.rate : 0;
   };
   const hasTp45UI = (fzRow.partName || '').toLowerCase().includes('tp_45');
@@ -354,12 +445,26 @@ export default function CreatePsTab({ psGridData, setPsGridData, imMasterData, s
                   className="pl-9 pr-4 py-2 border border-slate-300 rounded-lg text-sm w-full sm:w-80 focus:ring-2 focus:ring-blue-500 focus:outline-none"
               />
           </div>
-          <button 
-              onClick={handleRunAuto} 
-              className="w-full sm:w-auto text-white bg-blue-600 hover:bg-blue-700 px-5 py-2.5 rounded-lg text-sm shadow-sm transition-all font-bold flex items-center justify-center"
-          >
-              <Play className="w-4 h-4 mr-2" /> ยืนยันและรัน Item / PS Auto
-          </button>
+          <div className="flex gap-2">
+              <button onClick={handleRunAuto} className="flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-bold transition-all bg-indigo-600 text-white hover:bg-indigo-700 shadow-md">
+                  <Play className="w-4 h-4" fill="currentColor" /> ยืนยันและรัน Item / PS Auto
+              </button>
+              <button 
+                  onClick={() => {
+                      if(window.confirm('คุณต้องการล้างข้อมูลทั้งหมดใช่หรือไม่?')) {
+                          setPsGridData([defaultRow]);
+                          setSelectedRowIds(new Set([0]));
+                          setImMasterData([]);
+                          setPsBomData([]);
+                          setPsJobs([]);
+                          toast.success('ล้างข้อมูลเรียบร้อยแล้ว');
+                      }
+                  }} 
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold transition-all bg-white text-rose-600 hover:bg-rose-50 border border-rose-200 shadow-sm"
+              >
+                  <Trash2 className="w-4 h-4" /> ล้างข้อมูล
+              </button>
+          </div>
       </div>
 
         <div className="overflow-x-auto custom-scrollbar pb-4">
@@ -386,65 +491,6 @@ export default function CreatePsTab({ psGridData, setPsGridData, imMasterData, s
                 </tr>
               ))}
 
-              <tr className="bg-indigo-100 text-indigo-800 font-semibold border-b border-indigo-200 uppercase tracking-wider text-xs">
-              <td className="px-3 py-2.5 border-r border-indigo-200 font-bold" colSpan={5}><Calculator className="w-4 h-4 inline-block mr-1.5 mb-0.5" /> XX : สรุปสูตร<span className="ml-2 font-bold text-blue-600 normal-case px-2 py-1 bg-white rounded shadow-sm border border-indigo-200">({fzArea} ตร.ม.)</span></td>
-                <td className="px-3 py-2.5 border-r border-indigo-200 text-left font-bold">Child</td>
-                <td className="px-3 py-2.5 border-r border-indigo-200 text-right">Q'ty</td>
-                <td className="px-3 py-2.5 border-r border-indigo-200 text-center">Method</td>
-                <td className="px-3 py-2.5 border-r border-indigo-200 text-center">Place</td>
-                <td className="px-3 py-2.5 border-r border-indigo-200 text-center">Station</td>
-                <td className="px-3 py-2.5" colSpan={15}>Part name</td>
-              </tr>
-
-              {[
-                  { item: 'AAFT00010', qty: tile217Auto, name: 'GT 2.40X8.68X0.32 Custalian White (Std.)' },
-                  { item: 'AAFT00110', qty: tile104Auto, name: 'GT 2.40X4.16X0.32 Custalian White (Std.)' }
-              ].map(r => (
-                  <tr key={r.item} className="border-b border-indigo-100 bg-indigo-50/40 hover:bg-indigo-100/50 transition-colors">
-                  <td className="p-0 border-r border-indigo-100" colSpan={5}></td>
-                    <td className="p-0 border-r border-indigo-100"><input type="text" readOnly value={r.item} className="w-full h-full px-3 py-2.5 bg-transparent outline-none text-slate-700 font-medium"/></td>
-                    <td className="p-0 border-r border-indigo-100"><input type="text" readOnly value={r.qty} className="w-full h-full px-3 py-2.5 bg-transparent outline-none text-blue-700 text-right font-bold"/></td>
-                    <td className="p-0 border-r border-indigo-100"><input type="text" readOnly value="2" className="w-full h-full px-3 py-2.5 bg-transparent outline-none text-slate-700 text-center"/></td>
-                    <td className="p-0 border-r border-indigo-100"><input type="text" readOnly value="F" className="w-full h-full px-3 py-2.5 bg-transparent outline-none text-slate-700 text-center"/></td>
-                    <td className="p-0 border-r border-indigo-100"><input type="text" readOnly value="PF-TP" className="w-full h-full px-3 py-2.5 bg-transparent outline-none text-slate-700 text-center"/></td>
-                    <td className="p-0" colSpan={15}><input type="text" readOnly value={r.name} className="w-full h-full px-3 py-2.5 bg-transparent outline-none text-slate-700"/></td>
-                  </tr>
-              ))}
-
-              <tr className={`border-b border-indigo-100 bg-indigo-50/40 hover:bg-indigo-100/50 transition-colors ${!hasTp45UI ? 'opacity-50 bg-slate-50/50 grayscale' : ''}`}>
-              <td className="p-0 border-r border-indigo-100" colSpan={5}></td>
-                <td className="p-0 border-r border-indigo-100"><input type="text" readOnly value="AAFT00210" className="w-full h-full px-3 py-2.5 bg-transparent outline-none text-slate-700 font-medium"/></td>
-                <td className="p-0 border-r border-indigo-100"><input type="text" readOnly value={tileCornerAuto} className={`w-full h-full px-3 py-2.5 bg-transparent outline-none text-right font-bold ${hasTp45UI ? 'text-blue-700' : 'text-slate-400'}`}/></td>
-                <td className="p-0 border-r border-indigo-100"><input type="text" readOnly value="2" className="w-full h-full px-3 py-2.5 bg-transparent outline-none text-slate-700 text-center"/></td>
-                <td className="p-0 border-r border-indigo-100"><input type="text" readOnly value="F" className="w-full h-full px-3 py-2.5 bg-transparent outline-none text-slate-700 text-center"/></td>
-                <td className="p-0 border-r border-indigo-100"><input type="text" readOnly value="PF-TP" className="w-full h-full px-3 py-2.5 bg-transparent outline-none text-slate-700 text-center"/></td>
-                <td className="p-0" colSpan={15}><div className="flex items-center w-full h-full px-3 py-2.5 bg-transparent text-slate-700">GT 2.40X5.54X0.32 Custalian White (Corner) {!hasTp45UI && <span className="ml-2 text-[10px] text-red-500 font-semibold bg-red-50 px-2 py-0.5 rounded border border-red-100">(ข้าม: ไม่มี tp_45 ใน Board)</span>}</div></td>
-              </tr>
-
-              <tr className="border-b border-indigo-100 bg-indigo-50/40 hover:bg-indigo-100/50 transition-colors">
-              <td className="p-0 border-r border-indigo-100" colSpan={5}></td>
-                <td className="p-0 border-r border-indigo-100"><input type="text" readOnly value="AATC02110" className="w-full h-full px-3 py-2.5 bg-transparent outline-none text-slate-700 font-medium"/></td>
-                <td className="p-0 border-r border-indigo-100"><input type="text" readOnly value={qtyAATC} className="w-full h-full px-3 py-2.5 bg-transparent outline-none text-blue-700 text-right font-bold"/></td>
-                <td className="p-0 border-r border-indigo-100"><input type="text" readOnly value="2" className="w-full h-full px-3 py-2.5 bg-transparent outline-none text-slate-700 text-center"/></td>
-                <td className="p-0 border-r border-indigo-100"><input type="text" readOnly value="F" className="w-full h-full px-3 py-2.5 bg-transparent outline-none text-slate-700 text-center"/></td>
-                <td className="p-0 border-r border-indigo-100"><input type="text" readOnly value="Kanban => PF-TP" className="w-full h-full px-3 py-2.5 bg-transparent outline-none text-slate-700 text-center"/></td>
-                <td className="p-0" colSpan={15}><input type="text" readOnly value="Glue of ex panel WH C (Kendy White)" className="w-full h-full px-3 py-2.5 bg-transparent outline-none text-slate-700"/></td>
-              </tr>
-              
-              {[
-                  { item: 'AATC02130', name: 'PATTERN COATING' },
-                  { item: 'AATC02140', name: 'SEALER #3' }
-              ].map((r, i) => (
-                  <tr key={r.item} className="border-b border-indigo-100 bg-teal-50/40 hover:bg-teal-100/50 transition-colors">
-                  {i === 0 ? <td className="px-3 py-2.5 border-r border-teal-200 font-bold text-teal-700 text-right" colSpan={5}>ตัวอย่างกลุ่มสีพ่น (เช่น Variant H, J, K)</td> : <td className="p-0 border-r border-teal-100" colSpan={5}></td>}
-                    <td className="p-0 border-r border-teal-100"><input type="text" readOnly value={r.item} className="w-full h-full px-3 py-2.5 bg-transparent outline-none text-slate-700 font-medium"/></td>
-                    <td className="p-0 border-r border-teal-100"><input type="text" readOnly value={areaNum > 0 ? formatQty(areaNum * getFormulaRate(r.item)) : 0} className="w-full h-full px-3 py-2.5 bg-transparent outline-none text-teal-700 text-right font-bold"/></td>
-                    <td className="p-0 border-r border-teal-100"><input type="text" readOnly value="2" className="w-full h-full px-3 py-2.5 bg-transparent outline-none text-slate-700 text-center"/></td>
-                    <td className="p-0 border-r border-teal-100"><input type="text" readOnly value="F" className="w-full h-full px-3 py-2.5 bg-transparent outline-none text-slate-700 text-center"/></td>
-                    <td className="p-0 border-r border-teal-100"><input type="text" readOnly value="Kanban => PF-TP" className="w-full h-full px-3 py-2.5 bg-transparent outline-none text-slate-700 text-center"/></td>
-                    <td className="p-0" colSpan={15}><input type="text" readOnly value={r.name} className="w-full h-full px-3 py-2.5 bg-transparent outline-none text-slate-700"/></td>
-                  </tr>
-              ))}
             </tbody>
           </table>
         </div>

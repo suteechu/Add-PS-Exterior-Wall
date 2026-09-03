@@ -1,13 +1,59 @@
-import React, { useState } from 'react';
-import { Calculator, X, Copy } from 'lucide-react';
-import { formulaMasterData } from './constants';
-import { copyToClipboard } from './utils';
+import React, { useState, useEffect } from 'react';
+import { Calculator, X, Copy, Eye, EyeOff, Download } from 'lucide-react';
+import { toast } from 'react-hot-toast';
+import { copyToClipboard, exportToCsv } from './utils';
+import { panelVariants } from './constants';
 
-export default function AaftCalculatorModal({ isOpen, onClose }) {
+export default function AaftCalculatorModal({ isOpen, onClose, formulaData }) {
   const [areaInput, setAreaInput] = useState(1);
   const [widthInput, setWidthInput] = useState('');
   const [lengthInput, setLengthInput] = useState('');
-  const [selectedItems, setSelectedItems] = useState(() => new Set(formulaMasterData.map(i => i.code)));
+  const excludeBoards = ['AADZ09904', 'AADZ09903', 'AAFZ09901', 'AALZ09320', 'AAHZ09900', 'DDHZ09900', 'AAGY0002A', 'AAGY5070A'];
+
+  const [selectedItems, setSelectedItems] = useState(() => new Set((formulaData || []).map(i => i.code).filter(c => !excludeBoards.includes(c))));
+  const [showCalcResult, setShowCalcResult] = useState(false);
+  const [selectedVariant, setSelectedVariant] = useState('All');
+
+  useEffect(() => {
+      if (selectedVariant === 'All') {
+          setSelectedItems(new Set((formulaData || []).map(i => i.code).filter(c => !excludeBoards.includes(c))));
+          return;
+      }
+      
+      let allowed = ['AAFE70020', 'AASB20710', 'AAST03010'];
+      const boards = (formulaData || []).filter(i => i.group === 'Board' && !excludeBoards.includes(i.code)).map(i => i.code);
+      allowed = [...allowed, ...boards];
+      
+      const aaftCodes = ['A','B','C','D','E','F','G','Q'];
+      const sprayCodes = ['H','J','K','L','M','N'];
+      
+      if (selectedVariant === '0') {
+          allowed.push('AAFT00010', 'AAFT00110', 'AAFT00210');
+      } else if (aaftCodes.includes(selectedVariant)) {
+          let tCode = 1; let cCode = 1; 
+          switch (selectedVariant) {
+              case 'A': tCode = 1; cCode = 1; break; 
+              case 'B': tCode = 2; cCode = 1; break; 
+              case 'C': tCode = 2; cCode = 2; break; 
+              case 'D': tCode = 3; cCode = 1; break; 
+              case 'E': tCode = 3; cCode = 2; break; 
+              case 'F': tCode = 4; cCode = 1; break; 
+              case 'G': tCode = 5; cCode = 1; break; 
+              case 'Q': tCode = 1; cCode = 2; break; 
+          }
+          allowed.push(`AAFT000${tCode}0`, `AAFT001${tCode}0`, `AAFT002${tCode}0`);
+          allowed.push(`AATC021${cCode}0`);
+      } else if (sprayCodes.includes(selectedVariant)) {
+          allowed.push('AATC02130', 'AATC02140');
+          if (selectedVariant === 'H') allowed.push('AATC02150');
+          else if (selectedVariant === 'J') allowed.push('AATC02160');
+          else if (selectedVariant === 'K') allowed.push('AATC02170');
+          else if (selectedVariant === 'L') allowed.push('AATC02180');
+          else if (selectedVariant === 'M') allowed.push('AATC03200');
+          else if (selectedVariant === 'N') allowed.push('AATC02340');
+      }
+      setSelectedItems(new Set(allowed));
+  }, [selectedVariant, formulaData]);
 
   if (!isOpen) return null;
 
@@ -58,8 +104,8 @@ export default function AaftCalculatorModal({ isOpen, onClose }) {
   };
 
   const generatedItems = [];
-  if (isValid) {
-      formulaMasterData.forEach(item => {
+  if (isValid && formulaData) {
+      formulaData.forEach(item => {
           const qty = formatNumber(inputArea * item.rate);
           if (parseFloat(qty) > 0) {
               generatedItems.push({
@@ -82,7 +128,10 @@ export default function AaftCalculatorModal({ isOpen, onClose }) {
 
   const handleCopyTable = () => {
     const itemsToCopy = generatedItems.filter(row => selectedItems.has(row.item));
-    if (itemsToCopy.length === 0) return alert("ไม่มีข้อมูลที่เลือกให้คัดลอก");
+    if (itemsToCopy.length === 0) {
+        toast.error("ไม่มีข้อมูลที่เลือกให้คัดลอก");
+        return;
+    }
 
     const rows = itemsToCopy.map(row => [
         row.project, row.station, row.item, row.dueDate, row.qty, row.reasonCode,
@@ -90,13 +139,28 @@ export default function AaftCalculatorModal({ isOpen, onClose }) {
     ].join('\t'));
     const tsvWithoutHeader = rows.join('\n');
     copyToClipboard(tsvWithoutHeader);
-    alert(`คัดลอกสำเร็จ (${itemsToCopy.length} รายการ)! เฉพาะรายการที่เลือกสามารถนำไป Paste ใน Excel ได้เลยครับ`);
+    toast.success(`คัดลอกสำเร็จ (${itemsToCopy.length} รายการ)!`);
   };
 
-  const frameStructItems = formulaMasterData.filter(i => i.group === 'Frame' || i.group === 'Structure');
-  const boardItems = formulaMasterData.filter(i => i.group === 'Board');
-  const tileItems = formulaMasterData.filter(i => i.group === 'Tile');
-  const aatcItems = formulaMasterData.filter(i => i.group === 'AATC');
+  const handleExportTable = () => {
+    const itemsToCopy = generatedItems.filter(row => selectedItems.has(row.item));
+    if (itemsToCopy.length === 0) {
+        toast.error("ไม่มีข้อมูลที่เลือกให้ Export");
+        return;
+    }
+
+    const headers = ["Project", "Station", "Item", "Due Date", "Qty", "Reason Code", "Method", "Extra Order", "First Qty", "Remark", "Add Close", "Part Name"];
+    const rows = itemsToCopy.map(row => [
+        row.project, row.station, row.item, row.dueDate, row.qty, row.reasonCode,
+        row.method, row.extraOrder, row.firstQty, row.remark, row.addClose, row.partName
+    ]);
+    exportToCsv("AAFT_Calculator_Results.csv", [headers, ...rows]);
+  };
+
+  const frameStructItems = (formulaData || []).filter(i => i.group === 'Frame' || i.group === 'Structure');
+  const boardItems = (formulaData || []).filter(i => i.group === 'Board' && !excludeBoards.includes(i.code));
+  const tileItems = (formulaData || []).filter(i => i.group === 'Tile');
+  const aatcItems = (formulaData || []).filter(i => i.group === 'AATC');
 
   return (
     <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -117,17 +181,31 @@ export default function AaftCalculatorModal({ isOpen, onClose }) {
           <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
             <h3 className="font-bold text-slate-700 mb-3 text-sm">1. ระบุขนาดเพื่อคำนวณ (อ้างอิงฐาน 1 ตร.ม.)</h3>
             <div className="flex flex-wrap md:flex-nowrap gap-4 items-end">
-                <div className="w-full md:w-1/3">
+                <div className="w-full md:w-1/4">
+                    <label className="block text-slate-700 text-xs font-bold mb-1.5">แยกสี/แบบ (Variant)</label>
+                    <select 
+                        value={selectedVariant}
+                        onChange={(e) => setSelectedVariant(e.target.value)}
+                        className="shadow-sm border border-slate-300 rounded-lg w-full py-2 px-3 text-slate-700 leading-tight focus:outline-none focus:ring-2 focus:ring-blue-500 transition duration-200 text-sm font-medium bg-white"
+                    >
+                        <option value="All">เลือกอิสระทั้งหมด (All)</option>
+                        <option value="0">รหัสลงท้าย 0 (Base White)</option>
+                        {panelVariants.map(v => (
+                            <option key={v.code} value={v.code}>{v.code} ({v.suffix})</option>
+                        ))}
+                    </select>
+                </div>
+                <div className="w-full md:w-1/4">
                     <label className="block text-slate-700 text-xs font-bold mb-1.5">กว้าง (มม.)</label>
                     <input type="number" step="0.01" min="0" value={widthInput} onChange={(e) => handleDimensionsChange(e.target.value, lengthInput)} placeholder="ความกว้าง"
                         className="shadow-sm appearance-none border border-slate-300 rounded-lg w-full py-2 px-3 text-slate-700 leading-tight focus:outline-none focus:ring-2 focus:ring-blue-500 transition duration-200 text-sm"/>
                 </div>
-                <div className="w-full md:w-1/3">
+                <div className="w-full md:w-1/4">
                     <label className="block text-slate-700 text-xs font-bold mb-1.5">ยาว (มม.)</label>
                     <input type="number" step="0.01" min="0" value={lengthInput} onChange={(e) => handleDimensionsChange(widthInput, e.target.value)} placeholder="ความยาว"
                         className="shadow-sm appearance-none border border-slate-300 rounded-lg w-full py-2 px-3 text-slate-700 leading-tight focus:outline-none focus:ring-2 focus:ring-blue-500 transition duration-200 text-sm"/>
                 </div>
-                <div className="w-full md:w-1/3">
+                <div className="w-full md:w-1/4">
                     <label className="block text-blue-700 text-xs font-bold mb-1.5">พื้นที่รวม (ตร.ม.) *พิมพ์แก้ได้</label>
                     <div className="relative">
                         <input type="number" step="0.01" value={areaInput} onChange={(e) => handleAreaChange(e.target.value)}
@@ -139,10 +217,11 @@ export default function AaftCalculatorModal({ isOpen, onClose }) {
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 flex-1 min-h-0">
-            <div className="lg:col-span-1 overflow-y-auto custom-scrollbar pr-2 flex flex-col gap-3">
-                <h3 className="font-bold text-slate-700 text-sm border-b pb-2">ผลลัพธ์การคำนวณ</h3>
-                
-                {frameStructItems.map((item, idx) => (
+            {showCalcResult && (
+                <div className="lg:col-span-1 overflow-y-auto custom-scrollbar pr-2 flex flex-col gap-3">
+                    <h3 className="font-bold text-slate-700 text-sm border-b pb-2">ผลลัพธ์การคำนวณ</h3>
+                    
+                    {frameStructItems.map((item, idx) => (
                     <div key={item.code} className="bg-slate-50 rounded-xl p-3 border border-slate-200 shadow-sm flex items-center justify-between" title={item.name}>
                         <div>
                             <span className="bg-slate-200 text-slate-800 text-[10px] font-bold px-2 py-0.5 rounded-md mb-1 inline-block">{item.label}</span>
@@ -191,13 +270,27 @@ export default function AaftCalculatorModal({ isOpen, onClose }) {
                     </div>
                 </div>
             </div>
+            )}
 
-            <div className="lg:col-span-3 flex flex-col min-h-0 border-l border-slate-200 pl-6">
+            <div className={`${showCalcResult ? 'lg:col-span-3 border-l border-slate-200 pl-6' : 'lg:col-span-4'} flex flex-col min-h-0`}>
                 <div className="flex justify-between items-end mb-2">
-                    <h3 className="font-bold text-slate-700 text-sm">2. ตารางผลลัพธ์ (ฟอร์แมต Excel)</h3>
-                    <button onClick={handleCopyTable} className="flex items-center gap-2 px-4 py-2 rounded-md text-sm font-bold transition-all bg-emerald-50 text-emerald-700 hover:bg-emerald-100 hover:text-emerald-800 shadow-sm border border-emerald-200">
-                        <Copy className="w-4 h-4" /> Copy Table
-                    </button>
+                    <div className="flex items-center gap-3">
+                        <h3 className="font-bold text-slate-700 text-sm">2. ตารางผลลัพธ์ (ฟอร์แมต Excel)</h3>
+                        <button 
+                            onClick={() => setShowCalcResult(!showCalcResult)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-bold transition-all bg-slate-100 text-slate-600 hover:bg-slate-200 border border-slate-200"
+                        >
+                            {showCalcResult ? <><EyeOff className="w-3.5 h-3.5" /> ซ่อนผลคำนวณ</> : <><Eye className="w-3.5 h-3.5" /> แสดงผลคำนวณ</>}
+                        </button>
+                    </div>
+                    <div className="flex gap-2">
+                        <button onClick={handleExportTable} className="flex items-center gap-2 px-4 py-2 rounded-md text-sm font-bold transition-all bg-white text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 shadow-sm border border-emerald-200">
+                            <Download className="w-4 h-4" /> Export CSV
+                        </button>
+                        <button onClick={handleCopyTable} className="flex items-center gap-2 px-4 py-2 rounded-md text-sm font-bold transition-all bg-emerald-50 text-emerald-700 hover:bg-emerald-100 hover:text-emerald-800 shadow-sm border border-emerald-200">
+                            <Copy className="w-4 h-4" /> Copy Table
+                        </button>
+                    </div>
                 </div>
                 
                 <div className="border border-slate-300 rounded-lg overflow-x-auto custom-scrollbar flex-1 bg-white">
@@ -226,7 +319,7 @@ export default function AaftCalculatorModal({ isOpen, onClose }) {
                         <tbody>
                             {generatedItems.length > 0 ? (
                                 generatedItems.map((row, idx) => (
-                                    <tr key={idx} className={`border-b border-slate-200 hover:bg-slate-50 transition-colors ${selectedItems.has(row.item) ? '' : 'opacity-40 bg-gray-50 grayscale-[50%]'}`}>
+                                    <tr key={idx} className={`border-b border-slate-200 hover:bg-slate-50 transition-colors ${selectedItems.has(row.item) ? '' : 'hidden'}`}>
                                         <td className="px-3 py-1.5 border-r border-slate-200 text-center">
                                             <input type="checkbox" className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
                                                 checked={selectedItems.has(row.item)} onChange={() => toggleItemSelection(row.item)} />
